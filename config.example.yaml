@@ -1,0 +1,51 @@
+# Thông tin tài khoản Yodobashi
+account:
+  username: "your_email@example.com"
+  password: "your_password"
+
+# Danh sách sản phẩm - mỗi sản phẩm chạy song song trong thread riêng
+products:
+  # Mode 1: scheduled - Sản phẩm mở bán cố định theo giờ (flash sale hàng ngày)
+  - name: "Product Name Here"
+    url: "https://www.yodobashi.com/product/XXXXXXXXXX"
+    quantity: 1
+    mode: "scheduled"         # Chờ đến start_time rồi mới bắt đầu check
+    start_time: "09:25"       # Bắt đầu check (5 phút trước sale)
+    sale_time: "09:30"        # Giờ mở bán chính thức
+    check_interval: 5         # Check mỗi 5 giây
+    max_per_day: 5            # Tối đa mua/ngày (0 = không giới hạn)
+
+  # Mode 2: listening - Sản phẩm mở bán ngẫu nhiên (giới hạn theo tháng)
+  - name: "Random Restock Product"
+    url: "https://www.yodobashi.com/product/YYYYYYYYYY"
+    quantity: 1
+    mode: "listening"         # Check liên tục 24/7
+    check_interval: 60        # Check mỗi 60 giây
+    max_per_month: 1          # Tối đa mua/tháng (0 = không giới hạn)
+
+# Thông tin thẻ thanh toán
+payment:
+  card_number: "1234567890123456"
+  expiry_month: "01"
+  expiry_year: "2030"
+  cvv: "123"
+  card_holder_name: "YOUR NAME"
+
+# Địa chỉ giao hàng
+shipping:
+  full_name: "YOUR NAME"
+  postal_code: "100-0001"
+  prefecture: "東京都"
+  city: "千代田区"
+  address_line1: "1-1-1"
+  address_line2: ""
+  phone: "090-0000-0000"
+
+# Cài đặt chung
+settings:
+  max_retries: 3
+  dry_run: true               # true = dừng trước bước confirm, không mua thật
+  headless: true              # true = không hiện browser
+  timeout: 30
+  screenshot_on_error: true
+  require_confirmation: false

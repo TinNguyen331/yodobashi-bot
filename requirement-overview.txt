@@ -1,0 +1,13 @@
+Bot mua hàng trên https://www.yodobashi.com/
+Bot sẽ chạy và kiểm tra tự động các mặt hàng để trong config để mua khi sản phẩm avaiable. Có 2 dạng sản phẩm
+1. Sản phẩm bán giới hạn theo giờ
+    - Sản phẩm chỉ mở bán giới hạn theo giờ, đến giờ mở bán mới có thể mua được
+    - Sản phẩm bán giới hạn theo ngày, mỗi ngày chỉ đc mua tối đa nhiêu đó, qua ngày mới mua đc tiếp
+2. Sản phẩn mở bán ngẫu nhiên
+    - Sản phẩm mở bán ngẫu nhiên
+    - Sản phẩm giới hạn số lượng bán theo account theo tháng. Mỗi thảng 1 account chỉ đc mua tối đa 1 số lượng nhất định
+
+Yêu cầu của bot
+ - Bot chạy 24/7 để check sản phẩm có thể mua được, nếu sản phẩm nào đã đạt max giới hạn thì không check để mua nữa
+ - Bot chạy liên tục dù đã mua đc thì vẫn chạy tiếp, nếu thất bại thì vẫn chạy tiếp đợi tới lượt tiếp theo.
+ - Bot chỉ dừng khi user set dừng thủ công

@@ -1,0 +1,1 @@
+# yodobashi-bot-fast
