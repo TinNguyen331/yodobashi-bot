@@ -1,77 +1,106 @@
 # Project Overview — Yodobashi Auto Purchase Bot
 
-## Mục tiêu
+## Objectives
 
-Bot tự động mua hàng trên Yodobashi.com, hỗ trợ mua nhiều sản phẩm đồng thời với 2 chế độ:
-1. **Scheduled** — Sản phẩm flash sale cố định theo giờ hàng ngày
-2. **Listening** — Sản phẩm mở bán ngẫu nhiên, giới hạn số lượng theo tháng
+Automated purchasing bot for yodobashi.com supporting:
+- **Multiple products** — Up to N products monitored concurrently (each in separate thread)
+- **Two purchase modes:**
+  - **Scheduled** — Fixed-time daily flash sales (e.g., 9:30 AM every day)
+  - **Listening** — Random restock monitoring (24/7 continuous polling)
+- **24/7 operation** — Never stops, auto-resumes after purchase/failure
+- **Purchase limits** — Daily caps (scheduled) and monthly caps (listening) with auto-reset
 
-## Vấn đề cần giải quyết
+## Problem Statement
 
-- Sản phẩm giới hạn trên Yodobashi bán hết rất nhanh (vài giây)
-- Cần tự động hoá quy trình: check availability → add to cart → checkout
-- Cần hỗ trợ nhiều sản phẩm cùng lúc với các lịch mở bán khác nhau
-- Yodobashi có hệ thống chống bot (Akamai WAF, TLS fingerprinting)
+- Limited-quantity products on Yodobashi sell out in seconds
+- Manual purchasing is impractical; need full automation: check → add cart → checkout
+- Multiple products have different sale times; need concurrent monitoring
+- Yodobashi uses Akamai WAF + TLS fingerprinting to block bots
+- Session management complex; HTTP cookies don't work for checkout (Akamai WAF)
 
-## Giải pháp: Hybrid HTTP + Browser
+## Solution: Hybrid HTTP + Browser Architecture
 
-### Tại sao Hybrid?
+### Why Hybrid?
 
-| Tác vụ | HTTP (curl_cffi) | Browser (Playwright) |
-|--------|-------------------|----------------------|
-| Check availability | Nhanh (~1s), nhẹ | Chậm (~5s), nặng |
-| Add to cart | Không khả thi (*) | Hoạt động |
-| Checkout | Không khả thi (*) | Hoạt động |
+| Task | HTTP (curl_cffi) | Browser (Playwright) |
+|------|-------------------|----------------------|
+| Check availability | Fast (~1s), lightweight | Slow (~5s), resource-intensive |
+| Add to cart | **Not possible** (*) | Works |
+| Checkout | **Not possible** (*) | Works |
+| Session management | Limited (cookies only) | Full browser context, Akamai WAF compatible |
 
-(*) Yodobashi dùng Akamai WAF — session cookies gắn với browser context cụ thể, không thể transfer giữa HTTP và browser.
+(*) Yodobashi uses Akamai WAF — session cookies tied to specific browser context. Cannot transfer HTTP session to browser for checkout without losing auth.
 
-### Flow
+### Flow Diagram
 
-1. **HTTP polling** (curl_cffi) — check sản phẩm available mỗi N giây
-2. Khi available → khởi động **Playwright browser**
-3. Playwright thực hiện toàn bộ checkout flow
-4. Kết quả log ra console + file
+```
+1. HTTP Polling (curl_cffi)
+   ├─ Check product availability every check_interval seconds
+   ├─ Fast, lightweight, Chrome TLS fingerprint (bypass Akamai)
+   └─ If available → trigger Playwright
+       │
+       └─→ 2. Playwright Browser Checkout
+           ├─ Launch browser instance
+           ├─ Add to cart
+           ├─ Login (if not logged in)
+           ├─ Enter payment info
+           ├─ Confirm order (or dry-run stop)
+           └─ Result logged to console + file
+               ├─ On success → wait for next cycle
+               └─ On failure → continue polling (listening) or retry
+```
 
-## Phạm vi
+## Scope
 
-### Trong phạm vi
-- Multi-product concurrent purchasing
-- 2 purchase modes (scheduled, listening)
-- HTTP-based availability polling
-- Browser-based checkout automation
-- Dry run testing
-- Session persistence (cookies)
-- Error logging & screenshots
+### In Scope
+- Concurrent multi-product purchasing (up to N products)
+- Two modes: scheduled (daily flash) + listening (random restock)
+- HTTP polling with Chrome TLS fingerprint (Akamai bypass)
+- Browser checkout automation via Playwright
+- Dry-run mode (test without purchase)
+- Session persistence (cookies saved to JSON)
+- Error handling with screenshots & logging
+- CLI testing utilities (`--test-login`, `--test-search`, `--test-checkout`)
+- YAML configuration management
+- Purchase limit enforcement (daily/monthly caps)
 
-### Ngoài phạm vi
-- GUI/web interface
-- Proxy rotation
-- CAPTCHA solving
+### Out of Scope
+- GUI or web interface
+- Proxy rotation or pool management
+- CAPTCHA solving (requires manual intervention)
 - Mobile app automation
-- Multi-account support
+- Multi-account support (one account per bot instance)
+- Payment method variety (credit card only)
+- Convenience store payment, Apple Pay, bank transfer
+- Advanced anti-bot evasion (e.g., rotating User-Agents, request replay)
 
 ## Tech Stack
 
-| Component | Technology | Vai trò |
+| Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Language | Python 3.x | - |
-| HTTP Client | curl_cffi | TLS fingerprint impersonation |
-| HTML Parser | BeautifulSoup + lxml | Parse product pages |
-| Browser | Playwright (Chromium) | Checkout automation |
-| Config | PyYAML | YAML configuration |
-| Logging | Loguru | Structured logging |
-| Scheduling | Threading (built-in) | Concurrent product watching |
+| **Language** | Python 3.x | Core implementation |
+| **HTTP Client** | curl_cffi >=0.7.0 | TLS fingerprint impersonation (Akamai bypass) |
+| **HTML Parser** | BeautifulSoup4 + lxml | Parse product pages, detect availability |
+| **Browser** | Playwright >=1.49.0 (Chromium) | Checkout automation, JavaScript handling |
+| **Config Format** | PyYAML 6.0.1 | YAML config parsing |
+| **Logging** | loguru 0.7.2 | Structured logging (console + rotating file) |
+| **Concurrency** | Threading (built-in) | One daemon thread per product |
+| **Scheduling** | Manual (no APScheduler used) | `--run-now` flag, time-based waiting |
 
 ## Stakeholders
 
-- **User**: Người muốn mua sản phẩm giới hạn trên Yodobashi
-- **Target**: Yodobashi.com (Japanese e-commerce)
+- **Primary User** — Consumer wanting to buy limited-quantity products on Yodobashi
+- **Secondary User** — Bot operator (can monitor logs, adjust config, run tests)
+- **Target Platform** — yodobashi.com (Japanese e-commerce site)
 
-## Rủi ro
+## Risks & Mitigations
 
-| Rủi ro | Mức độ | Giảm thiểu |
-|--------|--------|------------|
-| Yodobashi thay đổi HTML structure | Trung bình | Selector fallbacks, log HTML debug |
-| Akamai block request | Cao | Chrome TLS impersonation, session persistence |
-| Race condition khi checkout | Thấp | Mỗi product thread độc lập |
-| Tài khoản bị ban | Trung bình | Rate limiting qua check_interval |
+| Risk | Severity | Mitigation |
+|------|----------|-----------|
+| Yodobashi HTML structure changes | Medium | Selector fallbacks, log HTML debug output, manual updates |
+| Akamai WAF IP block | High | Chrome TLS impersonation via curl_cffi, session persistence, respect rate limits |
+| Race condition during checkout | Low | Each product thread independent, no shared checkout state |
+| Account ban due to bot detection | Medium | `check_interval` rate limiting, random-like polling, anti-detection flags in Playwright |
+| Login failure / CAPTCHA | Medium | Manual intervention required, screenshot on error, dry-run mode for testing |
+| Payment failure (declined card) | Low | Handled gracefully, logs error, continues polling |
+| Session expiry / cookie loss | Low | Session persistence to JSON; auto-reload on next run |

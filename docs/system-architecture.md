@@ -5,26 +5,26 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        main.py                                  │
-│                   (CLI + Orchestrator)                          │
+│                   (CLI + Sequential Loop)                       │
 │                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   Thread 1   │  │   Thread 2   │  │   Thread N   │          │
-│  │  Product A   │  │  Product B   │  │  Product N   │          │
-│  │  (scheduled) │  │  (listening) │  │  (any mode)  │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-└─────────┼─────────────────┼─────────────────┼──────────────────┘
-          │                 │                 │
-          ▼                 ▼                 ▼
+│  run_sequential():                                              │
+│    for each product in config (round-robin):                    │
+│      - Check scheduled window if mode="scheduled"               │
+│      - Check daily/monthly limits                               │
+│      - Poll until available                                     │
+│      - Purchase via Playwright                                  │
+│      - Clear cart on failure                                    │
+│      - Loop to next product                                     │
+└──────────┬────────────────────────────────────────────────────┘
+           │
+           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    watch_product()                               │
+│                    round-robin processing                        │
 │                                                                  │
-│  0. 24/7 Outer Loop (never exits):                              │
-│     - Reset daily/monthly counters on date change               │
-│     - Check limits: skip if max_per_day/max_per_month reached   │
-│     [scheduled] Wait until start_time, repeat daily             │
-│     [listening] Start immediately                               │
-│                                                                  │
-│  1. Polling Loop (every check_interval seconds):                │
+│  For each product N (repeating round-robin):                    │
+│     - Check if now is within start_time window (scheduled)       │
+│     - Check daily/monthly limits, skip if reached               │
+│     - Poll until available (every check_interval seconds):                │
 │     ┌──────────────────────────────────────┐                    │
 │     │  HttpSession.reload_product_page()   │ ← curl_cffi       │
 │     │  ProductHandler.is_product_available()│ ← BeautifulSoup   │
@@ -38,26 +38,26 @@
 │               │  │ (Add → Login → Pay → Confirm)│               │
 │               │  └───────────────────────────┘                  │
 │               │    │  Success → daily_count++ / monthly_count++  │
-│               │    │  Limit reached? → pause until reset         │
+│               │    │  Failure → CheckoutHandler.clear_cart()     │
 │               │                                                  │
-│               └──── continue loop (24/7, never exits) ────────  │
+│               └──── Move to next product in round-robin ────────  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Components
 
-### 1. main.py — 24/7 Orchestrator
+### 1. main.py — Sequential Loop Orchestrator
 
 **Responsibilities:**
 - CLI argument parsing
 - Config loading
-- Thread management (1 thread per product)
+- Sequential product loop (round-robin processing)
 - Test utilities (login, search, checkout)
 
 **Key Functions:**
-- `watch_product()` — Per-product 24/7 watcher loop (never returns)
-- `run_all_products()` — Multi-thread orchestrator (runs forever)
-- `_wait_until_start_time()` — Wait for daily scheduled start
+- `run_sequential()` — Main loop that processes all products sequentially (never returns)
+- `_is_in_scheduled_window()` — Check if current time is within product's scheduled window
+- `_wait_until_start_time()` — Wait until scheduled window begins
 - `_wait_until_next_month()` — Pause until monthly limit resets
 - `test_login()` / `test_search()` / `test_checkout()` — Test helpers
 
@@ -155,26 +155,29 @@ config.yaml
 | Screenshots | `logs/*.png` | PNG | Manual cleanup |
 | Debug HTML | `logs/*.html` | HTML | Manual cleanup |
 
-## Threading Model
+## Execution Model
 
-- **Single product**: Chạy trong main thread (chạy mãi)
-- **Multiple products**: Mỗi product 1 daemon thread (chạy mãi)
-- **Không shared state**: Mỗi thread có HttpSession, ProductHandler, CheckoutHandler riêng
-- **Main thread**: Sleep vĩnh viễn (1h intervals), Ctrl+C để dừng
-- **Purchase tracking**: Mỗi thread tự track daily_count/monthly_count, auto-reset
+- **Sequential processing** — Single main loop processes all products in round-robin order
+- **No threading** — Products processed sequentially, not in parallel
+- **Per-product session** — Single HttpSession instance reused for all products
+- **Cart lifecycle** — Cleared on purchase failure before moving to next product
+- **Purchase tracking** — Counters per product, stored in memory, auto-reset on date/month change
+- **Main loop** — Runs forever (24/7), Ctrl+C to exit
 
 ## Purchase Limits
 
-| Config | Mode | Hành vi |
-|--------|------|---------|
-| `max_per_day: 5` | scheduled | Mua tối đa 5/ngày, reset khi qua ngày mới |
-| `max_per_month: 1` | listening | Mua tối đa 1/tháng, pause đến ngày 1 tháng sau |
-| `0` hoặc không set | cả 2 | Không giới hạn |
+| Config | Mode | Behavior |
+|--------|------|----------|
+| `max_per_day: 5` | scheduled | Max 5 purchases/day, auto-reset at midnight |
+| `max_per_month: 1` | listening | Max 1 purchase/month, auto-resume on 1st of next month |
+| `0` or omitted | both | Unlimited (no limit enforced) |
 
 ## Security Considerations
 
-- `config.yaml` chứa credentials → trong `.gitignore`
-- Akamai WAF bypass qua Chrome TLS impersonation
-- Session cookies lưu local, không encrypt
-- Playwright chạy với anti-detection flags
-- Rate limiting qua `check_interval` config
+- **config.yaml** contains credentials → MUST be in `.gitignore`, never commit
+- **Akamai WAF bypass** — curl_cffi Chrome TLS impersonation
+- **Session persistence** — Cookies stored locally in JSON, unencrypted (treat as sensitive)
+- **Browser anti-detection** — Playwright launched with `--disable-blink-features=AutomationControlled`, ja-JP locale, Asia/Tokyo timezone
+- **Rate limiting** — Respect `check_interval` to avoid IP blocks; recommend 5s (scheduled), 60s (listening)
+- **No proxy** — All requests from single IP; risk of detection on heavy load
+- **Credential scope** — Single account per bot instance; multi-account requires multiple config files

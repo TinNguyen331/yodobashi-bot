@@ -471,6 +471,123 @@ class CheckoutHandler:
             logger.error(f"Confirm error: {e}")
             return False
 
+    def clear_cart(self) -> bool:
+        """
+        Navigate to cart page and remove all items.
+        Called after purchase failure to prevent cart conflicts with next product.
+        Returns True if cart is empty after cleanup.
+        """
+        logger.info("Clearing shopping cart...")
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.error("Playwright not installed!")
+            return False
+
+        try:
+            with sync_playwright() as pw:
+                headless = self.settings.get('headless', True)
+                browser = pw.chromium.launch(
+                    headless=headless,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-infobars',
+                        '--no-sandbox',
+                    ],
+                )
+                context = browser.new_context(
+                    viewport={'width': 1280, 'height': 800},
+                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                               'AppleWebKit/537.36 (KHTML, like Gecko) '
+                               'Chrome/120.0.0.0 Safari/537.36',
+                    locale='ja-JP',
+                    timezone_id='Asia/Tokyo',
+                )
+                timeout_ms = self.settings.get('timeout', 30) * 1000
+                context.set_default_timeout(timeout_ms)
+                page = context.new_page()
+
+                try:
+                    page.goto('https://order.yodobashi.com/shoppingcart/index.html',
+                              wait_until='domcontentloaded')
+
+                    # Handle login redirect if needed
+                    if self._is_login_page(page):
+                        logger.info("Login required to access cart, logging in...")
+                        if not self._login_at_checkout(page):
+                            logger.error("Cannot login to clear cart")
+                            return False
+                        page.goto('https://order.yodobashi.com/shoppingcart/index.html',
+                                  wait_until='domcontentloaded')
+
+                    # Check if cart is already empty
+                    empty_texts = ['ショッピングカートに商品はありません',
+                                   'カートに商品がありません',
+                                   '商品が入っていません']
+                    for txt in empty_texts:
+                        try:
+                            if page.locator(f'text={txt}').first.is_visible(timeout=1000):
+                                logger.info("Cart is already empty")
+                                return True
+                        except:
+                            pass
+
+                    # Remove items: click delete buttons until cart is empty
+                    max_attempts = 20  # safety limit
+                    for attempt in range(max_attempts):
+                        # Look for delete button (削除)
+                        delete_btn = None
+                        for selector in [
+                            'a:has-text("削除")',
+                            'button:has-text("削除")',
+                            'a.delete',
+                            '.deleteBtn a',
+                            'a[href*="delete"]',
+                        ]:
+                            try:
+                                btn = page.locator(selector).first
+                                if btn.is_visible(timeout=1000):
+                                    delete_btn = btn
+                                    break
+                            except:
+                                continue
+
+                        if not delete_btn:
+                            # No more delete buttons — cart should be empty
+                            logger.info("No more items to delete")
+                            break
+
+                        logger.info(f"Removing cart item (attempt {attempt + 1})...")
+                        delete_btn.click()
+                        time.sleep(1)
+
+                        # Handle confirmation dialog if any
+                        try:
+                            confirm = page.locator('a:has-text("はい"), button:has-text("はい"), '
+                                                   'a:has-text("OK"), button:has-text("OK")').first
+                            if confirm.is_visible(timeout=2000):
+                                confirm.click()
+                        except:
+                            pass
+
+                        page.wait_for_load_state('domcontentloaded')
+
+                    logger.success("Cart cleared")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Cart cleanup error: {e}")
+                    self._screenshot(page, "cart_cleanup_error")
+                    return False
+                finally:
+                    context.close()
+                    browser.close()
+
+        except Exception as e:
+            logger.error(f"Cart cleanup failed: {e}")
+            return False
+
     def _screenshot(self, page, name: str):
         """Save screenshot for debugging"""
         if not self.settings.get('screenshot_on_error', True):

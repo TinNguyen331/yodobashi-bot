@@ -4,7 +4,7 @@ Bot tự động mua hàng trên Yodobashi.com, hỗ trợ mua nhiều sản ph�
 
 ## Tính năng
 
-- **Mua nhiều sản phẩm đồng thời** — mỗi sản phẩm chạy trong thread riêng
+- **Mua nhiều sản phẩm** — xử lý tuần tự round-robin, tránh xung đột cart
 - **Bot chạy 24/7** — không bao giờ dừng, tự chạy tiếp sau mua thành công/thất bại
 - **2 chế độ mua hàng:**
   - `scheduled` — Sản phẩm mở bán cố định theo giờ, lặp lại hàng ngày
@@ -101,7 +101,7 @@ python main.py --config path/to/config.yaml
 
 ```
 yodobashi-bot-fast/
-├── main.py                  # Entry point, orchestrator, CLI
+├── main.py                  # Entry point, sequential loop orchestrator
 ├── bot/
 │   ├── http_session.py      # HTTP session (curl_cffi, Chrome TLS)
 │   ├── product_handler.py   # Tìm kiếm & kiểm tra sản phẩm
@@ -119,11 +119,13 @@ yodobashi-bot-fast/
 
 ```
 ┌──────────────────────────────────────────────────┐
-│              main.py (24/7 Orchestrator)         │
-│  Thread 1: Product A (scheduled, max 5/day)      │
-│  Thread 2: Product B (listening, max 1/month)    │
-│  Thread N: ...                                    │
-│  Main thread: sleep forever, Ctrl+C to stop      │
+│           main.py (Sequential Loop)               │
+│  run_sequential():                                │
+│    for each product (round-robin):                │
+│      - Check availability via HTTP                │
+│      - If available: purchase via Playwright      │
+│      - On failure: clear cart before next product │
+│      - Repeat forever                             │
 └──────────┬───────────────────────────────────────┘
            │
     ┌──────┴──────┐
@@ -136,9 +138,9 @@ yodobashi-bot-fast/
     │  (Checkout)  │  ← Add to cart → Login → Payment → Confirm
     └──────┬──────┘
            │ Mua xong / thất bại
-           │ → scheduled: chờ ngày mai
-           │ → listening: tiếp tục poll
-           │ → đạt limit: pause đến reset
+           │ → Clear cart on failure (tránh xung đột)
+           │ → Move to next product in round-robin
+           │ → Repeat forever
            └──→ LOOP FOREVER
 ```
 

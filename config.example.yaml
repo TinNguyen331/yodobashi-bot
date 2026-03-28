@@ -3,7 +3,8 @@ account:
   username: "your_email@example.com"
   password: "your_password"
 
-# Danh sách sản phẩm - mỗi sản phẩm chạy song song trong thread riêng
+# Danh sách sản phẩm - xử lý tuần tự (round-robin)
+# Lưu ý: sản phẩm được kiểm tra một lần mỗi lần, nếu còn hàng thì mua luôn, rồi tiếp tục sản phẩm tiếp theo
 products:
   # Mode 1: scheduled - Sản phẩm mở bán cố định theo giờ (flash sale hàng ngày)
   - name: "Product Name Here"
@@ -49,3 +50,6 @@ settings:
   timeout: 30
   screenshot_on_error: true
   require_confirmation: false
+
+# Lưu ý: Nếu mua thất bại, cart sẽ được xóa sạch trước khi chuyển sang sản phẩm tiếp theo
+# (tránh xung đột cart giữa các sản phẩm trong lần lặp tiếp theo)

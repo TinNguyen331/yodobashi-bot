@@ -1,23 +1,24 @@
 # Deployment Guide
 
-## Yêu cầu hệ thống
+## System Requirements
 
-- Python 3.8+
-- Chromium browser (cài qua Playwright)
-- RAM: ~200MB (HTTP polling) + ~300MB per Playwright instance
-- Network: Kết nối ổn định đến yodobashi.com
-- OS: Windows, macOS, hoặc Linux
+- **Python** 3.8 or higher
+- **Chromium browser** (installed via Playwright)
+- **RAM** — ~200MB (HTTP polling) + ~300MB per Playwright instance
+- **Disk** — ~100MB for venv + dependencies, ~50MB for logs + session
+- **Network** — Stable connection to yodobashi.com, no VPN needed (but OK to use)
+- **OS** — Windows, macOS, or Linux (supports all platforms)
 
-## Cài đặt
+## Installation
 
-### 1. Clone project
+### 1. Clone repository
 
 ```bash
 git clone <repo_url>
-cd yodobashi-bot-fast
+cd yodobashi-bot
 ```
 
-### 2. Tạo virtual environment
+### 2. Create virtual environment
 
 ```bash
 python -m venv venv
@@ -25,153 +26,220 @@ python -m venv venv
 # Activate
 # Windows:
 venv\Scripts\activate
-# Linux/macOS:
+# macOS / Linux:
 source venv/bin/activate
 ```
 
-### 3. Cài dependencies
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Cài Playwright browser
+### 4. Install Playwright browser
 
 ```bash
 playwright install chromium
 ```
 
-### 5. Cấu hình
+### 5. Create configuration
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-Sửa `config.yaml` với thông tin thật:
-- `account` — Email + password Yodobashi
-- `products` — Danh sách sản phẩm cần mua
-- `payment` — Thông tin thẻ
-- `shipping` — Địa chỉ giao hàng
-- `settings` — Cài đặt bot
+Edit `config.yaml` with your real data:
+- `account.username` — Yodobashi email/ID
+- `account.password` — Yodobashi password
+- `products[]` — List of products to monitor
+- `payment` — Credit card details
+- `shipping` — Delivery address
+- `settings` — Bot preferences (dry_run, headless, timeouts, etc.)
 
-### 6. Kiểm tra trước khi chạy
+**⚠️ Security:** `config.yaml` is gitignored; never commit it. Contains credentials.
+
+### 6. Test before running
 
 ```bash
-# Test đăng nhập (mở browser để xác nhận)
+# Test login (opens browser, manual confirmation)
 python main.py --test-login
 
-# Test tìm sản phẩm qua HTTP
+# Test HTTP product search (prints first result)
 python main.py --test-search
 
-# Test full checkout (dry run, không mua thật)
+# Test full checkout (dry-run, does NOT purchase)
 python main.py --test-checkout
 ```
 
-## Chạy bot
+All tests log to console and `logs/bot_YYYYMMDD.log`.
 
-### Chạy bình thường (theo config)
+## Running the Bot
+
+### Normal operation (respect config)
 
 ```bash
 python main.py
 ```
 
-Bot chạy 24/7, không bao giờ tự dừng. Ctrl+C để tắt.
+Bot runs 24/7, never stops on its own. Press **Ctrl+C** to shutdown.
 
-- `scheduled`: Chờ đến `start_time` mỗi ngày → poll → mua → chờ ngày mai
-- `listening`: Poll liên tục → mua → tiếp tục poll
-- Đạt giới hạn (`max_per_day`/`max_per_month`) → tự pause đến khi reset
+**Behavior per mode:**
+- **scheduled** — Waits until `start_time` each day → polls → purchases → waits for next day
+- **listening** — Polls continuously every `check_interval` → purchases → continues polling
+- **Limit reached** — Auto-pauses until reset (daily at midnight for scheduled, monthly on 1st for listening)
 
-### Chạy ngay (skip chờ giờ)
+### Run now (skip time wait)
 
 ```bash
 python main.py --run-now
 ```
 
-Override tất cả products sang `listening` mode, polling ngay.
+Overrides all `scheduled` products to `listening` mode; starts polling immediately (no wait for `start_time`).
 
-### Chạy background (Linux/macOS)
+### Run in background (Linux/macOS)
 
 ```bash
+nohup python main.py > bot.log 2>&1 &
+# Or with output to loguru's rotating log:
 nohup python main.py > /dev/null 2>&1 &
 ```
 
-### Chạy background (Windows)
+Bot logs to `logs/bot_YYYYMMDD.log` automatically.
+
+### Run in background (Windows)
 
 ```bash
 start /B python main.py
 ```
 
-Bot đã chạy 24/7 tự động, không cần Task Scheduler.
+Or use Task Scheduler to run at startup:
+1. Open Task Scheduler
+2. Create Basic Task
+3. Trigger: At startup
+4. Action: Start program `python.exe` with arguments `main.py` in project directory
 
-## Cấu hình chi tiết
+## Configuration Details
 
-### Scheduled mode (flash sale hàng ngày)
+### Scheduled Mode (Daily Flash Sale)
 
 ```yaml
 - name: "FUJIFILM Instax Film"
   url: "https://www.yodobashi.com/product/100000001006011748"
   quantity: 5
   mode: "scheduled"
-  start_time: "09:25"     # 5 phút trước giờ sale
-  sale_time: "09:30"      # Giờ sale chính thức
-  check_interval: 5       # Poll mỗi 5 giây khi đến giờ
-  max_per_day: 5          # Tối đa 5 cái/ngày (0 = không giới hạn)
+  start_time: "09:25"     # Start polling 5 min before sale time
+  sale_time: "09:30"      # Official sale time (info only)
+  check_interval: 5       # Poll every 5 seconds
+  max_per_day: 5          # Max 5 purchases per day (0 = unlimited)
 ```
 
-**Lưu ý:**
-- `start_time` nên sớm hơn `sale_time` 3-5 phút
-- `check_interval: 3-5` giây cho scheduled mode
-- Bot tự lặp lại hàng ngày, chờ `start_time` ngày mai sau khi mua xong
-- `max_per_day`: khi đạt limit → tự pause, reset khi qua ngày mới
+**Notes:**
+- `start_time` should be 3-5 minutes before `sale_time`
+- `check_interval: 5-10` seconds recommended for scheduled mode
+- Bot repeats daily; waits for next day's `start_time` after purchase
+- `max_per_day` counter resets at midnight automatically
 
-### Listening mode (canh mở bán random)
+### Listening Mode (Random Restock)
 
 ```yaml
 - name: "Nintendo Switch"
   url: "https://www.yodobashi.com/product/YYYYYYYYYY"
   quantity: 1
   mode: "listening"
-  check_interval: 60      # Poll mỗi 60 giây
-  max_per_month: 1        # Tối đa 1 cái/tháng (0 = không giới hạn)
+  check_interval: 60      # Poll every 60 seconds
+  max_per_month: 1        # Max 1 purchase per month (0 = unlimited)
 ```
 
-**Lưu ý:**
-- `check_interval: 60` giây để tránh bị rate limit
-- Bot chạy 24/7, tiếp tục poll sau khi mua thành công/thất bại
-- `max_per_month`: khi đạt limit → tự pause đến ngày 1 tháng sau
-- Có thể set `check_interval: 30` nếu muốn nhanh hơn (rủi ro bị block)
+**Notes:**
+- `check_interval: 60` seconds recommended to avoid rate limiting
+- Bot runs 24/7; continues polling after purchase success/failure
+- `max_per_month` counter resets on 1st of next month automatically
+- Can reduce to `check_interval: 30` for faster response (higher risk of block)
 
 ## Troubleshooting
 
-### Bot bị block/timeout
-- Tăng `check_interval` (ít request hơn)
-- Xoá `session/cookies.json` để reset session
-- Check log file `logs/bot_YYYYMMDD.log` cho chi tiết
+### Bot blocked / timeout errors
 
-### Login thất bại
-- Kiểm tra username/password trong `config.yaml`
-- Chạy `python main.py --test-login` (hiện browser để debug)
-- Check nếu Yodobashi yêu cầu CAPTCHA
+**Symptoms:** Repeated 403/429 errors, connection timeouts
 
-### Sản phẩm available nhưng checkout fail
-- Check screenshots trong `logs/*.png`
-- Check HTML debug pages trong `logs/*.html`
-- Thử `python main.py --test-checkout` với `headless: false`
-- Yodobashi có thể thay đổi HTML structure → cần update selectors
+**Solutions:**
+- Increase `check_interval` (fewer requests per minute)
+- Delete `session/cookies.json` to reset session
+- Check `logs/bot_YYYYMMDD.log` for details
+- Check if IP is flagged by Akamai; wait 24 hours or use different network
 
-### Playwright errors
-- Reinstall: `playwright install chromium`
-- Update: `pip install --upgrade playwright`
+### Login fails
 
-## Giám sát
+**Symptoms:** "Login failed" in logs, "ログイン" link still visible
 
-- **Logs realtime**: `tail -f logs/bot_YYYYMMDD.log`
-- **Screenshots**: Check `logs/*.png` sau mỗi lần chạy
-- **Session**: `session/cookies.json` — xoá nếu cần reset
+**Solutions:**
+- Verify `account.username` and `account.password` in config
+- Run `python main.py --test-login` to see browser and debug manually
+- Check if Yodobashi requires CAPTCHA (requires manual intervention)
+- Ensure account is not locked or 2FA enabled
 
-## Bảo mật
+### Product available but checkout fails
 
-- **KHÔNG** commit `config.yaml` (chứa credentials)
-- **KHÔNG** share `session/cookies.json`
-- `config.yaml` đã được gitignore
-- Cân nhắc encrypt config nếu chạy trên shared server
+**Symptoms:** Availability detected but purchase doesn't complete
+
+**Solutions:**
+- Check screenshots: `logs/*.png` (saved on error)
+- Check HTML debug: `logs/*.html` (page snapshots)
+- Run `python main.py --test-checkout` with `headless: false` (see browser)
+- Yodobashi may have changed HTML structure; update selectors in code or report issue
+- Check if payment card is valid / not declined
+
+### Playwright errors (browser crashes)
+
+**Symptoms:** "Playwright crashed", "Page closed"
+
+**Solutions:**
+- Reinstall Chromium: `playwright install chromium`
+- Update Playwright: `pip install --upgrade playwright`
+- Check available disk space (Chromium needs ~300MB)
+- Check system RAM (may OOM if multiple products checkout simultaneously)
+
+### Session expires / cookies lost
+
+**Symptoms:** Requires re-login every run, "認証が必要" (authentication required)
+
+**Solutions:**
+- Check `session/cookies.json` exists and is not empty
+- Delete `session/cookies.json` to force fresh login
+- Ensure bot runs regularly so session doesn't expire
+
+## Monitoring
+
+### View logs in real-time
+
+```bash
+# Linux/macOS:
+tail -f logs/bot_YYYYMMDD.log
+
+# Windows (PowerShell):
+Get-Content logs/bot_YYYYMMDD.log -Wait
+```
+
+### Check for errors
+
+```bash
+grep ERROR logs/bot_YYYYMMDD.log
+grep -A5 "purchase failed" logs/bot_YYYYMMDD.log
+```
+
+### Screenshots & debug files
+
+```bash
+ls -lah logs/*.png      # Error screenshots
+ls -lah logs/*.html     # Debug HTML pages
+```
+
+## Security Best Practices
+
+- **Never commit** `config.yaml` (contains credentials)
+- **Never share** `session/cookies.json` (session tokens)
+- `config.yaml` is already in `.gitignore`
+- **Encrypt config** if running on shared server (consider using environment variables or secrets manager)
+- **Rotate credentials** periodically (change Yodobashi password)
+- **Monitor account** for suspicious activity (check Yodobashi order history)
+- **Use strong password** on Yodobashi account
