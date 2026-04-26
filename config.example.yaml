@@ -3,26 +3,22 @@ account:
   username: "your_email@example.com"
   password: "your_password"
 
-# Danh sách sản phẩm - xử lý tuần tự (round-robin)
-# Lưu ý: sản phẩm được kiểm tra một lần mỗi lần, nếu còn hàng thì mua luôn, rồi tiếp tục sản phẩm tiếp theo
-products:
-  # Mode 1: scheduled - Sản phẩm mở bán cố định theo giờ (flash sale hàng ngày)
-  - name: "Product Name Here"
-    url: "https://www.yodobashi.com/product/XXXXXXXXXX"
-    quantity: 1
-    mode: "scheduled"         # Chờ đến start_time rồi mới bắt đầu check
-    start_time: "09:25"       # Bắt đầu check (5 phút trước sale)
-    sale_time: "09:30"        # Giờ mở bán chính thức
-    check_interval: 5         # Check mỗi 5 giây
-    max_per_day: 5            # Tối đa mua/ngày (0 = không giới hạn)
-
-  # Mode 2: listening - Sản phẩm mở bán ngẫu nhiên (giới hạn theo tháng)
-  - name: "Random Restock Product"
-    url: "https://www.yodobashi.com/product/YYYYYYYYYY"
-    quantity: 1
-    mode: "listening"         # Check liên tục 24/7
-    check_interval: 60        # Check mỗi 60 giây
-    max_per_month: 1          # Tối đa mua/tháng (0 = không giới hạn)
+# Sản phẩm cần mua (1 sản phẩm = 1 instance)
+# Để mua nhiều sản phẩm: chạy nhiều instance với config riêng
+#   python main.py --config config-product1.yaml
+#   python main.py --config config-product2.yaml
+product:
+  name: "Product Name Here"
+  url: "https://www.yodobashi.com/product/XXXXXXXXXX"
+  quantity: 1
+  mode: "listening"           # scheduled | listening
+  check_interval: 60          # Check mỗi N giây
+  # Chỉ dùng cho mode=scheduled:
+  # start_time: "09:25"       # Bắt đầu check
+  # sale_time: "09:30"        # Giờ mở bán
+  # max_per_day: 5            # Giới hạn/ngày (0 = unlimited)
+  # Chỉ dùng cho mode=listening:
+  max_per_month: 1            # Giới hạn/tháng (0 = unlimited)
 
 # Thông tin thẻ thanh toán
 payment:
@@ -51,5 +47,4 @@ settings:
   screenshot_on_error: true
   require_confirmation: false
 
-# Lưu ý: Nếu mua thất bại, cart sẽ được xóa sạch trước khi chuyển sang sản phẩm tiếp theo
-# (tránh xung đột cart giữa các sản phẩm trong lần lặp tiếp theo)
+# Lưu ý: Nếu mua thất bại, cart sẽ được xóa sạch trước khi retry

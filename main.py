@@ -3,17 +3,18 @@
 Yodobashi Auto Purchase Bot (Fast/Hybrid version)
 ==================================================
 
-Processes products sequentially (one at a time) to avoid cart conflicts.
-Round-robin checks all products, purchases first available, clears cart on failure.
+Single product per instance. Run multiple instances with different configs
+for multiple products.
 
-Two buy modes per product:
+Two buy modes:
   scheduled  - Fixed sale time daily. Only checked during time window.
-  listening  - Random restock. Checked every round, 24/7.
+  listening  - Random restock. Checked 24/7.
 
 Usage:
-    python main.py                  # Run all products (default)
-    python main.py --run-now        # Skip wait, check all immediately
-    python main.py --test-checkout  # Dry-run first product
+    python main.py                  # Run with config.yaml
+    python main.py --config p1.yaml # Run with custom config
+    python main.py --run-now        # Skip scheduled wait
+    python main.py --test-checkout  # Dry-run
     python main.py --test-search    # Test HTTP search
     python main.py --test-login     # Test login
 """
@@ -70,132 +71,118 @@ def _navigate_to_product(handler, url: str, name: str, tag: str):
 # Sequential orchestrator (replaces parallel threading)
 # ---------------------------------------------------------------------------
 
-def run_sequential(config: dict):
+def run_single_product(config: dict):
     """
-    Run all products sequentially in a single loop, 24/7.
-    Round-robin checks each product, purchases first available,
-    clears cart on failure, then restarts from product #1.
-
-    Only one product is purchased at a time to avoid cart conflicts.
+    Run single product monitor 24/7.
+    Check availability, purchase when ready, clear cart on failure.
+    Stops on Ctrl+C or when limits reached.
     """
-    products = config.get('products', [])
-    if not products:
-        logger.error("No products configured!")
+    product = config.get('product')
+    if not product:
+        logger.error("No product configured! Add 'product:' to config.yaml")
         return False
 
-    # Per-product purchase counters
-    counters = {}
-    for i in range(len(products)):
-        counters[i] = {
-            'daily_count': 0, 'daily_date': None,
-            'monthly_count': 0, 'monthly_key': None,
-        }
+    mode = product.get('mode', 'listening')
+    url = product.get('url', '').strip()
+    name = product.get('name', '').strip()
+    check_interval = product.get('check_interval', 60 if mode == 'listening' else 5)
+    max_per_day = product.get('max_per_day', 0)
+    max_per_month = product.get('max_per_month', 0)
 
-    # Use smallest check_interval across all products as the round delay
-    default_interval = min(
-        p.get('check_interval', 60 if p.get('mode', 'scheduled') == 'listening' else 5)
-        for p in products
-    )
+    # Purchase counters
+    daily_count, daily_date = 0, None
+    monthly_count, monthly_key = 0, None
 
+    display = (name or url)[:60]
     logger.info("=" * 60)
-    logger.info(f"Starting Yodobashi Bot 24/7 — {len(products)} product(s) [SEQUENTIAL]")
-    logger.info("=" * 60)
-    for i, p in enumerate(products):
-        mode = p.get('mode', 'scheduled')
-        display = (p.get('name', '') or p.get('url', ''))[:50]
-        logger.info(f"  [P{i+1}] {display} ({mode})")
-    logger.info(f"  Round interval: {default_interval}s")
+    logger.info(f"Yodobashi Bot — Single Product Mode")
+    logger.info(f"  Product: {display}")
+    logger.info(f"  Mode: {mode} | Interval: {check_interval}s")
+    if mode == 'scheduled':
+        logger.info(f"  Start: {product.get('start_time', '09:25')} | Max/day: {max_per_day or 'unlimited'}")
+    else:
+        logger.info(f"  Max/month: {max_per_month or 'unlimited'}")
     logger.info("=" * 60)
 
-    round_num = 0
+    check_num = 0
 
-    # --- 24/7 outer loop: never exits ---
     while True:
         try:
-            round_num += 1
+            check_num += 1
             now = datetime.now()
-            purchased_this_round = False
 
-            for i, product in enumerate(products):
-                tag = f"[P{i+1}]"
-                mode = product.get('mode', 'scheduled')
-                url = product.get('url', '').strip()
-                name = product.get('name', '').strip()
-                max_per_day = product.get('max_per_day', 0)
-                max_per_month = product.get('max_per_month', 0)
-                c = counters[i]
+            # Reset counters on day/month change
+            today = now.date()
+            if daily_date != today:
+                daily_count = 0
+                daily_date = today
 
-                # --- Reset counters on day/month change ---
-                today = now.date()
-                if c['daily_date'] != today:
-                    c['daily_count'] = 0
-                    c['daily_date'] = today
+            this_month = (now.year, now.month)
+            if monthly_key != this_month:
+                monthly_count = 0
+                monthly_key = this_month
 
-                this_month = (now.year, now.month)
-                if c['monthly_key'] != this_month:
-                    c['monthly_count'] = 0
-                    c['monthly_key'] = this_month
+            # Check limits
+            if mode == 'scheduled' and max_per_day > 0 and daily_count >= max_per_day:
+                logger.info(f"Daily limit reached ({daily_count}/{max_per_day}), waiting for next day...")
+                time.sleep(60)
+                continue
 
-                # --- Skip if daily limit reached (scheduled) ---
-                if mode == 'scheduled' and max_per_day > 0 and c['daily_count'] >= max_per_day:
-                    continue
+            if mode == 'listening' and max_per_month > 0 and monthly_count >= max_per_month:
+                logger.info(f"Monthly limit reached ({monthly_count}/{max_per_month}), waiting...")
+                time.sleep(3600)
+                continue
 
-                # --- Skip if monthly limit reached (listening) ---
-                if mode == 'listening' and max_per_month > 0 and c['monthly_count'] >= max_per_month:
-                    continue
+            # Scheduled: skip if not in time window
+            if mode == 'scheduled' and not _is_in_scheduled_window(product):
+                time.sleep(check_interval)
+                continue
 
-                # --- Scheduled: skip if not in time window ---
-                if mode == 'scheduled' and not _is_in_scheduled_window(product):
-                    continue
+            # Check availability via HTTP
+            try:
+                with HttpSession(config) as http:
+                    http.navigate_to_home()
+                    handler = ProductHandler(http, config)
 
-                # --- Check availability via HTTP (fast) ---
-                try:
-                    with HttpSession(config) as http:
-                        http.navigate_to_home()
-                        handler = ProductHandler(http, config)
+                    if not _navigate_to_product(handler, url, name, ""):
+                        time.sleep(check_interval)
+                        continue
 
-                        if not _navigate_to_product(handler, url, name, tag):
-                            continue
+                    soup = handler.reload_product_page()
+                    if not soup or not handler.is_product_available(soup):
+                        if check_num % 10 == 1:
+                            now_str = now.strftime('%H:%M:%S')
+                            logger.info(f"[{now_str}] Not available (check #{check_num})")
+                        time.sleep(check_interval)
+                        continue
 
-                        soup = handler.reload_product_page()
-                        if not soup or not handler.is_product_available(soup):
-                            if round_num % 10 == 1:
-                                now_str = datetime.now().strftime('%H:%M:%S')
-                                logger.info(f"{tag} [{now_str}] Not available")
-                            continue
+            except Exception as e:
+                logger.error(f"Check error: {e}")
+                time.sleep(check_interval)
+                continue
 
-                except Exception as e:
-                    logger.error(f"{tag} Check error: {e}")
-                    continue
+            # Product available! Purchase it
+            now_str = datetime.now().strftime('%H:%M:%S')
+            logger.success(f"[{now_str}] AVAILABLE! Launching purchase...")
 
-                # --- Product is available! Purchase it ---
-                now_str = datetime.now().strftime('%H:%M:%S')
-                logger.success(f"{tag} [{now_str}] AVAILABLE! Launching purchase...")
+            checkout = CheckoutHandler(config)
+            if checkout.purchase(product):
+                logger.success("Purchase completed!")
+                daily_count += 1
+                monthly_count += 1
+                logger.info(f"Today: {daily_count}{f'/{max_per_day}' if max_per_day else ''} | "
+                            f"Month: {monthly_count}{f'/{max_per_month}' if max_per_month else ''}")
+            else:
+                logger.error("Purchase failed, clearing cart...")
+                checkout.clear_cart()
 
-                checkout = CheckoutHandler(config)
-                if checkout.purchase(product):
-                    logger.success(f"{tag} Purchase completed!")
-                    c['daily_count'] += 1
-                    c['monthly_count'] += 1
-                    logger.info(f"{tag} Today: {c['daily_count']}"
-                                f"{f'/{max_per_day}' if max_per_day else ''} | "
-                                f"Month: {c['monthly_count']}"
-                                f"{f'/{max_per_month}' if max_per_month else ''}")
-                else:
-                    logger.error(f"{tag} Purchase failed, clearing cart...")
-                    checkout.clear_cart()
-
-                purchased_this_round = True
-                break  # Restart round-robin from product #1
-
-            # Sleep between rounds
-            time.sleep(default_interval)
+            time.sleep(check_interval)
 
         except KeyboardInterrupt:
             logger.info("Shutting down...")
             return True
         except Exception as e:
-            logger.error(f"Round error: {e}, restarting in 60s...")
+            logger.error(f"Error: {e}, retrying in 60s...")
             time.sleep(60)
 
 
@@ -242,15 +229,14 @@ def test_login(config: dict):
 def test_search(config: dict):
     """Test product search via HTTP"""
     logger.info("=== Testing Product Search (HTTP) ===")
-    products = config.get('products', [])
-    if not products:
-        logger.error("No products to test!")
+    product = config.get('product')
+    if not product:
+        logger.error("No product configured!")
         return False
 
     with HttpSession(config) as http:
         http.navigate_to_home()
         handler = ProductHandler(http, config)
-        product = products[0]
 
         url = product.get('url', '').strip()
         name = product.get('name', '').strip()
@@ -273,7 +259,7 @@ def test_search(config: dict):
 
 
 def test_checkout(config: dict):
-    """Test full checkout (dry-run) on first product"""
+    """Test full checkout (dry-run)"""
     logger.info("=" * 60)
     logger.info("=== Testing Checkout Flow - Dry Run ===")
     logger.info("=" * 60)
@@ -282,13 +268,11 @@ def test_checkout(config: dict):
         config['settings'] = {}
     config['settings']['dry_run'] = True
 
-    products = config.get('products', [])
-    if not products:
-        logger.error("No products!")
+    product = config.get('product')
+    if not product:
+        logger.error("No product configured!")
         return False
 
-    # Check availability then purchase (dry-run)
-    product = products[0]
     with HttpSession(config) as http:
         http.navigate_to_home()
         handler = ProductHandler(http, config)
@@ -350,14 +334,13 @@ def main():
         success = test_checkout(config)
         sys.exit(0 if success else 1)
     elif args.run_now:
-        # Override all products to skip scheduled wait
-        for p in config.get('products', []):
-            p['mode'] = 'listening'
-            p.setdefault('check_interval', 5)
-        run_sequential(config)  # Runs forever
+        # Override to skip scheduled wait
+        if config.get('product'):
+            config['product']['mode'] = 'listening'
+            config['product'].setdefault('check_interval', 5)
+        run_single_product(config)
     else:
-        # Default: run all products 24/7
-        run_sequential(config)  # Runs forever
+        run_single_product(config)
 
 
 if __name__ == '__main__':
